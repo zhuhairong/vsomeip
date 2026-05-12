@@ -1317,7 +1317,7 @@ graph TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CREATED: runtime::create_application()
+    [*] --> CREATED: runtime.create_application()
 
     CREATED --> INITIALIZED: init()
     INITIALIZED --> STARTING: start()
