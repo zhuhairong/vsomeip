@@ -1554,33 +1554,33 @@ graph LR
 ```mermaid
 graph TD
     subgraph "CMake Build System"
-        CMAKE[CMakeLists.txt]
-        CONFIG_IN[internal.hpp.in<br/>配置模板]
+        CMAKE["CMakeLists.txt"]
+        CONFIG_IN["internal.hpp.in<br/>配置模板"]
     end
 
     subgraph "Input"
-        SRC[Source Files<br/>*.cpp]
-        HDR[Headers<br/>*.hpp]
-        BOOST[Boost >= 1.74]
+        SRC["Source Files<br/>*.cpp"]
+        HDR["Headers<br/>*.hpp"]
+        BOOST["Boost >= 1.74"]
     end
 
     subgraph "Output"
-        CORE[libvsomeip3.so - 核心库]
-        CFG[libvsomeip3-cfg.so - 配置插件]
-        SD[libvsomeip3-sd.so - 服务发现插件]
-        E2E[libvsomeip3-e2e.so - E2E 保护插件]
-        RMD[routingmanagerd - 路由守护进程]
-        EXAMPLE[hello_world / request-sample...]
-        CTRL[vsomeip_ctrl - 诊断工具]
+        CORE["libvsomeip3.so - 核心库"]
+        CFG["libvsomeip3-cfg.so - 配置插件"]
+        SD["libvsomeip3-sd.so - 服务发现插件"]
+        E2E["libvsomeip3-e2e.so - E2E 保护插件"]
+        RMD["routingmanagerd - 路由守护进程"]
+        EXAMPLE["hello_world / request-sample..."]
+        CTRL["vsomeip_ctrl - 诊断工具"]
     end
 
     subgraph "Dependencies"
-        DEP_BOOST[Boost.Filesystem]
-        DEP_ASIO[Boost.Asio]
-        DEP_DLT[DLT (可选)]
-        DEP_SYSTEMD[SystemD (可选)]
-        DEP_GTEST[Google Test (可选测试)]
-        DEP_DOXY[Doxygen + Graphviz (可选文档)]
+        DEP_BOOST["Boost.Filesystem"]
+        DEP_ASIO["Boost.Asio"]
+        DEP_DLT["DLT (可选)"]
+        DEP_SYSTEMD["SystemD (可选)"]
+        DEP_GTEST["Google Test (可选测试)"]
+        DEP_DOXY["Doxygen + Graphviz (可选文档)"]
     end
 
     CMAKE --> CORE & CFG & SD & E2E
