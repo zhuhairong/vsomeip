@@ -82,8 +82,8 @@ graph TB
 
     RM --> EMI
     RM --> EMB
-    EMI --> NETWORK
-    EMB --> LOCAL
+    EMI --> BE
+    EMB --> LSRV
 ```
 
 ### 两个体系的分工
@@ -227,21 +227,23 @@ sequenceDiagram
     EMI->>EMI: 查 remote_services_ 映射
     alt 已存在端点
         EMI-->>RM: 返回已有端点
-    else 同分区可复用
-        EMI->>EMI: 查 client_endpoints_[addr][port][reliable][partition]
-        EMI-->>RM: 返回可复用端点
-    else 需新建
-        EMI->>EMI: create_remote_client()
-        EMI->>EMI: create_client_endpoint(address, port, reliable)
-        alt TCP
-            EMI->>EP: new tcp_client_endpoint_impl
-        else UDP
-            EMI->>EP: new udp_client_endpoint_impl
+    else 需要创建或复用
+        alt 同分区可复用
+            EMI->>EMI: 查 client_endpoints_[addr][port][reliable][partition]
+            EMI-->>RM: 返回可复用端点
+        else 需新建
+            EMI->>EMI: create_remote_client()
+            EMI->>EMI: create_client_endpoint(address, port, reliable)
+            alt TCP
+                EMI->>EP: new tcp_client_endpoint_impl
+            else UDP
+                EMI->>EP: new udp_client_endpoint_impl
+            end
+            EP-->>EMI: 端点对象
+            EMI->>EMI: 存入 remote_services_ + client_endpoints_
+            EP->>EP: start() → connect()
+            EMI-->>RM: 返回端点
         end
-        EP-->>EMI: 端点对象
-        EMI->>EMI: 存入 remote_services_ + client_endpoints_
-        EP->>EP: start() → connect()
-        EMI-->>RM: 返回端点
     end
 ```
 
@@ -346,13 +348,13 @@ stateDiagram-v2
 ```mermaid
 graph TD
     subgraph SEND["发送路径"]
-        A[send(data, size)] --> B{CONNECTED && !is_sending?}
+        A[send(data, size)] --> B{"CONNECTED && !is_sending?"}
         B -->|是| C[send_unlock]
         B -->|否| D[入队 send_queue_]
         C --> E[send_buffer_unlock]
         E --> F[socket_->async_send]
         F --> G[send_cbk]
-        G -->|成功| H{队列还有数据?}
+        G -->|成功| H{"队列还有数据?"}
         H -->|是| C
         H -->|否| I[clear is_sending_]
         G -->|失败| J[escalate → FAILED]
@@ -362,7 +364,7 @@ graph TD
         K[socket_->async_receive] --> L[receive_cbk]
         L --> M[process(new_bytes)]
         M --> N[receive_buffer_->next_message]
-        N --> O{完整消息?}
+        N --> O{"完整消息?"}
         O -->|是| P[routing_host_->on_message]
         O -->|否 且需要扩容| Q[add_capacity]
         O -->|否| K
@@ -436,15 +438,15 @@ struct train {
 ```mermaid
 flowchart TD
     A[send(data, size) 被调用] --> B[取消当前 dispatch 定时器]
-    B --> C{连接状态 >= ESTABLISHED?}
+    B --> C{"连接状态 >= ESTABLISHED?"}
     C -->|否| D[直接入队 queue_]
-    C -->|是| E{新消息和 train 中最后一个重复?}
+    C -->|是| E{"新消息和 train 中最后一个重复?"}
     E -->|是| F[替换为最新版本<br/>（去抖优化）]
-    E -->|否| G{添加后超过 max_message_size?}
+    E -->|否| G{"添加后超过 max_message_size?"}
     G -->|是| H[train 必须发车]
-    G -->|否| I{距上次发车超过 debouncing 时间?}
+    G -->|否| I{"距上次发车超过 debouncing 时间?"}
     I -->|是| H
-    I -->|否| J{train 最旧消息超过 retention 时间?}
+    I -->|否| J{"train 最旧消息超过 retention 时间?"}
     J -->|是| H
 
     H --> K[当前 train 编组完成<br/>存入 dispatched_trains_]
@@ -520,12 +522,14 @@ sequenceDiagram
             alt 完整消息
                 EP->>RH: on_message(msg, remote_address, port)
                 RH->>EP: 继续 receive()
-            else 部分消息
-                EP->>RB: resize 容纳更多数据
-                EP->>S: async_receive（继续读剩余部分）
-            else 超大消息
-                EP->>RB: 扩展 buffer 大小
-                EP->>S: async_receive
+            else 部分消息或超大消息
+                alt 部分消息
+                    EP->>RB: resize 容纳更多数据
+                    EP->>S: async_receive（继续读剩余部分）
+                else 超大消息
+                    EP->>RB: 扩展 buffer 大小
+                    EP->>S: async_receive
+                end
             end
         end
     end
@@ -542,7 +546,7 @@ flowchart LR
     A[UDP receive_cbk] --> B{检查 TP 标志位}
     B -->|未设置 TP| C[完整消息 → routing_host_->on_message]
     B -->|设置了 TP| D[tp_reassembler_->process_tp_message]
-    D --> E{所有分片到齐?}
+    D --> E{"所有分片到齐?"}
     E -->|是| F[重组完整消息]
     E -->|否| G[缓存分片，等待剩余]
     F --> C
@@ -596,21 +600,23 @@ sequenceDiagram
     alt 是请求且服务在本地
         RM->>RM: find_local_client() → 找到本地
         RM->>RM: send_local() → 通过 local_endpoint 发送
-    else 是请求且服务在远程
-        RM->>EMI: find_or_create_remote_client(service, instance, reliable)
-        alt 连接不存在
-            EMI->>EP: create_client_endpoint()
-            EP->>EP: start() → connect()
-            EP-->>EMI: 返回端点
+    else 其他（远程请求或响应）
+        alt 是请求且服务在远程
+            RM->>EMI: find_or_create_remote_client(service, instance, reliable)
+            alt 连接不存在
+                EMI->>EP: create_client_endpoint()
+                EP->>EP: start() → connect()
+                EP-->>EMI: 返回端点
+            end
+            RM->>EP: send(data, size)
+            EP->>EP: train 批处理
+            EP->>NET: async_write(socket)
+        else 是响应
+            RM->>RM: 查 server endpoint
+            RM->>SEP: send(data, size)
+            SEP->>SEP: send_intern(target, data, size)
+            SEP->>NET: async_write(socket)
         end
-        RM->>EP: send(data, size)
-        EP->>EP: train 批处理
-        EP->>NET: async_write(socket)
-    else 是响应
-        RM->>RM: 查 server endpoint
-        RM->>SEP: send(data, size)
-        SEP->>SEP: send_intern(target, data, size)
-        SEP->>NET: async_write(socket)
     end
 
     Note over NET: === 网络传输 ===
@@ -650,12 +656,12 @@ graph LR
 ```mermaid
 flowchart TD
     A[offer_service(service, instance)] --> B[routing_manager_impl::init_service_info]
-    B --> C{是否本地服务?}
+    B --> C{"是否本地服务?"}
     C -->|是| D[不需要网络端点<br/>只需等待本地客户端]
-    C -->|否| E{已有可靠服务?}
+    C -->|否| E{"已有可靠服务?"}
     E -->|是| F[查或创建 0x0001 端口 TCP 服务端端点]
     F --> G[bind → listen → async_accept]
-    E -->|否| H{已有不可靠服务?}
+    E -->|否| H{"已有不可靠服务?"}
     H -->|是| I[查或创建不可靠端口 UDP 服务端端点]
     I --> J[bind → 开始接收]
     H -->|否| K[结束]
@@ -833,7 +839,7 @@ graph TB
 flowchart LR
     A[需要连接远程] --> B[查配置的端口范围]
     B --> C[request_used_client_port]
-    C --> D{端口已被占用?}
+    C --> D{"端口已被占用?"}
     D -->|是| E[尝试下一个端口]
     D -->|否| F[标记该端口已使用]
     E --> D
@@ -872,6 +878,9 @@ sequenceDiagram
     participant S as local_server
     participant LES as local_endpoint<br/>（服务端侧）
     participant SR as Service 应用
+    participant EP as "tcp_client_endpoint"
+    participant NET as "网络"
+    participant SEP as "tcp_server_endpoint"
 
     Note over SC,SR: 应用启动与注册
     SC->>LEC: init() + start()
@@ -896,13 +905,13 @@ sequenceDiagram
     SC->>LEC: send (SOME/IP 消息)
     LEC->>RMR: on_message（本地 IPC 送达）
     RMR->>EMI: 查 remote_services_ → 找到客户端端点
-    RMR->>EP[tcp_client_endpoint]: send(data, size)
+    RMR->>EP: send(data, size)
     EP->>EP: 加入 train
-    EP->>NET[网络]: async_write → TCP 发送
+    EP->>NET: async_write → TCP 发送
 
     Note over NET: 网络传输
 
-    NET->>SEP[tcp_server_endpoint]: receive_cbk
+    NET->>SEP: receive_cbk
     SEP->>SEP: 消息解析 + Magic Cookie 检查
     SEP->>RMR: on_message(msg)
     RMR->>SR: send_local → local_endpoint
