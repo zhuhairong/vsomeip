@@ -17,3 +17,4 @@
 /logs
 !build_qnx/*
 zhr/demo_request/build/**
+zhr/build/**
