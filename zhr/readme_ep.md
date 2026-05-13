@@ -346,30 +346,36 @@ stateDiagram-v2
 **收发流程**：
 
 ```mermaid
-graph TD
+graph LR
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
     subgraph SEND["发送路径"]
-        A[send(data, size)] --> B{"CONNECTED && !is_sending?"}
-        B -->|是| C[send_unlock]
-        B -->|否| D[入队 send_queue_]
-        C --> E[send_buffer_unlock]
-        E --> F[socket_->async_send]
-        F --> G[send_cbk]
-        G -->|成功| H{"队列还有数据?"}
+        direction TB
+        A["send data, size"] --> B["已连接且非发送中?"]
+        B -->|是| C["send_unlock"]
+        B -->|否| D["入队 send_queue_"]
+        C --> E["send_buffer_unlock"]
+        E --> F["socket_->async_send"]
+        F --> G["send_cbk"]
+        G -->|成功| H["队列还有数据?"]
         H -->|是| C
-        H -->|否| I[clear is_sending_]
-        G -->|失败| J[escalate → FAILED]
+        H -->|否| I["clear is_sending_"]
+        G -->|失败| J["escalate → FAILED"]
     end
 
     subgraph RECV["接收路径"]
-        K[socket_->async_receive] --> L[receive_cbk]
-        L --> M[process(new_bytes)]
-        M --> N[receive_buffer_->next_message]
-        N --> O{"完整消息?"}
-        O -->|是| P[routing_host_->on_message]
-        O -->|否 且需要扩容| Q[add_capacity]
+        direction TB
+        K["socket_->async_receive"] --> L["receive_cbk"]
+        L --> M["process new_bytes"]
+        M --> N["receive_buffer_->next_message"]
+        N --> O["完整消息?"]
+        O -->|是| P["routing_host_->on_message"]
+        O -->|否 且需要扩容| Q["add_capacity"]
         O -->|否| K
         P --> N
     end
+
+    class B,H,O decision
 ```
 
 **安全机制**：`is_allowed()` 方法通过 SO_PEERCRED（UDS）或地址/端口验证（TCP）检查对端是否有权限通信。
@@ -437,30 +443,34 @@ struct train {
 
 ```mermaid
 flowchart TD
-    A[send(data, size) 被调用] --> B[取消当前 dispatch 定时器]
-    B --> C{"连接状态 >= ESTABLISHED?"}
-    C -->|否| D[直接入队 queue_]
-    C -->|是| E{"新消息和 train 中最后一个重复?"}
-    E -->|是| F[替换为最新版本<br/>（去抖优化）]
-    E -->|否| G{"添加后超过 max_message_size?"}
-    G -->|是| H[train 必须发车]
-    G -->|否| I{"距上次发车超过 debouncing 时间?"}
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
+    A["send data, size 被调用"] --> B["取消当前 dispatch 定时器"]
+    B --> C["连接状态 >= ESTABLISHED?"]
+    C -->|否| D["直接入队 queue_"]
+    C -->|是| E["新消息和 train 中最后一个重复?"]
+    E -->|是| F["替换为最新版本<br/>去抖优化"]
+    E -->|否| G["添加后超过 max_message_size?"]
+    G -->|是| H["train 必须发车"]
+    G -->|否| I["距上次发车超过 debouncing 时间?"]
     I -->|是| H
-    I -->|否| J{"train 最旧消息超过 retention 时间?"}
+    I -->|否| J["train 最旧消息超过 retention 时间?"]
     J -->|是| H
 
-    H --> K[当前 train 编组完成<br/>存入 dispatched_trains_]
-    K --> L[创建新 train]
-    L --> M[新消息加入新 train]
+    H --> K["当前 train 编组完成<br/>存入 dispatched_trains_"]
+    K --> L["创建新 train"]
+    L --> M["新消息加入新 train"]
 
-    J --> N[消息追加到当前 train buffer]
+    J --> N["消息追加到当前 train buffer"]
 
-    M --> O[设置 dispatch 定时器<br/>timer = now + min(debouncing, retention)]
+    M --> O["设置 dispatch 定时器<br/>timer = now + min debouncing, retention"]
     N --> O
 
-    O --> P[定时器触发 → flush_cbk]
-    P --> Q[所有到期的 train 移入 queue_]
-    Q --> R[send_queued → async_write]
+    O --> P["定时器触发 → flush_cbk"]
+    P --> Q["所有到期的 train 移入 queue_"]
+    Q --> R["send_queued → async_write"]
+
+    class C,E,G,I,J decision
 ```
 
 ### 5.3 Train 参数来源
@@ -478,18 +488,21 @@ flowchart TD
 
 ```mermaid
 graph LR
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
     subgraph TRAIN_LIFE["Train 的生命周期"]
         A[创建空 train<br/>departure = now + 6h] --> B[添加消息1]
         B --> C[添加消息2]
         C --> D[添加消息3]
-        D --> E{触发发车条件}
+        D --> E["触发发车条件"]
         E -->|debounce / retention / 超长| F[train 存入 dispatched_trains_]
         F --> G[定时器到期]
         G --> H[train 数据移入 queue_]
         H --> I[send_queued 写入 socket]
     end
-```
 
+    class E decision
+```
 多个 train 可以同时存在 `dispatched_trains_` 映射中，按发车时间索引。
 
 ---
@@ -543,15 +556,19 @@ UDP 是数据报协议，本身有消息边界，但 SOME/IP TP（Transport Prot
 
 ```mermaid
 flowchart LR
-    A[UDP receive_cbk] --> B{检查 TP 标志位}
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
+    A[UDP receive_cbk] --> B["检查 TP 标志位"]
     B -->|未设置 TP| C[完整消息 → routing_host_->on_message]
     B -->|设置了 TP| D[tp_reassembler_->process_tp_message]
-    D --> E{"所有分片到齐?"}
+    D --> E["所有分片到齐?"]
     E -->|是| F[重组完整消息]
     E -->|否| G[缓存分片，等待剩余]
     F --> C
     G --> H[设置 TP 清理定时器]
     H --> I[超时未收齐 → 丢弃]
+
+    class B,E decision
 ```
 
 ### 6.3 本地端点消息解析
@@ -655,16 +672,20 @@ graph LR
 
 ```mermaid
 flowchart TD
-    A[offer_service(service, instance)] --> B[routing_manager_impl::init_service_info]
-    B --> C{"是否本地服务?"}
-    C -->|是| D[不需要网络端点<br/>只需等待本地客户端]
-    C -->|否| E{"已有可靠服务?"}
-    E -->|是| F[查或创建 0x0001 端口 TCP 服务端端点]
-    F --> G[bind → listen → async_accept]
-    E -->|否| H{"已有不可靠服务?"}
-    H -->|是| I[查或创建不可靠端口 UDP 服务端端点]
-    I --> J[bind → 开始接收]
-    H -->|否| K[结束]
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
+    A["offer_service service, instance"] --> B["routing_manager_impl::init_service_info"]
+    B --> C["是否本地服务?"]
+    C -->|是| D["不需要网络端点<br/>只需等待本地客户端"]
+    C -->|否| E["已有可靠服务?"]
+    E -->|是| F["查或创建 0x0001 端口 TCP 服务端端点"]
+    F --> G["bind → listen → async_accept"]
+    E -->|否| H["已有不可靠服务?"]
+    H -->|是| I["查或创建不可靠端口 UDP 服务端端点"]
+    I --> J["bind → 开始接收"]
+    H -->|否| K["结束"]
+
+    class C,E,H decision
 ```
 
 ### 7.3 SD 发现后创建客户端端点
@@ -837,14 +858,18 @@ graph TB
 
 ```mermaid
 flowchart LR
+    classDef decision fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+
     A[需要连接远程] --> B[查配置的端口范围]
     B --> C[request_used_client_port]
-    C --> D{"端口已被占用?"}
+    C --> D["端口已被占用?"]
     D -->|是| E[尝试下一个端口]
     D -->|否| F[标记该端口已使用]
     E --> D
     F --> G[create_client_endpoint<br/>使用选定端口]
     G --> H[绑定本地端口]
+
+    class D decision
     H -->|绑定失败| I[on_bind_error → 尝试下一个端口]
     I --> D
 ```
